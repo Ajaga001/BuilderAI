@@ -43,8 +43,11 @@ localStorage and is sent directly from the browser to Anthropic's API.
   Claude's vision API returns structured text/JSON, not bounding boxes, so the
   dashed outline and corner markers on the AR screen are a visual flourish, not
   a real measurement overlay.
-- **Model:** currently set to Claude Haiku 4.5 (`claude-haiku-4-5-20251001`) in
+- **Model:** currently set to Claude Haiku 4.5 (`claude-haiku-4-5`) in
   `src/BuilderAI.jsx` for low cost during testing. Swap `CLAUDE_MODEL` to a
   Sonnet or Opus model for higher-accuracy reads once the pipeline is proven out.
+- **Blueprints must be images** (PNG/JPG). PDFs aren't supported yet — export
+  or photograph the page first. Large photos are downscaled automatically
+  before upload.
 - Home screen stats, the Offline tab, and the Export PDF / Save Offline buttons
   are still placeholder UI, not wired to anything real.

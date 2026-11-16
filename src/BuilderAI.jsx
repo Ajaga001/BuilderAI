@@ -284,7 +284,9 @@ const FontLoader = () => (
 // a small quality tradeoff on tricky/ambiguous blueprints. Bump to
 // "claude-sonnet-5-5" if you want a middle ground, or back to an Opus model
 // for maximum accuracy once you're past the testing phase.
-const CLAUDE_MODEL = "claude-haiku-4-5-20251001";
+// Alias rather than a dated snapshot — it always resolves to a live model.
+// Swap to a Sonnet or Opus model for sharper reads of fine print on plans.
+const CLAUDE_MODEL = "claude-haiku-4-5";
 const CLAUDE_API = "https://api.anthropic.com/v1/messages";
 const API_KEY_STORAGE = "builderai_api_key";
 
@@ -352,22 +354,39 @@ function clearStoredApiKey() {
   } catch {}
 }
 
+// Claude downscales anything larger than this anyway, and the API rejects
+// images over 5MB. A straight-from-the-phone blueprint photo blows past both,
+// so everything gets resized before it goes up.
+const MAX_IMAGE_DIM = 1568;
+
+function downscaleToBase64(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const longest = Math.max(img.width, img.height);
+      const scale = longest > MAX_IMAGE_DIM ? MAX_IMAGE_DIM / longest : 1;
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      const out = canvas.toDataURL("image/jpeg", 0.85);
+      resolve({ base64: out.split(",")[1], mimeType: "image/jpeg" });
+    };
+    img.onerror = () => reject(new Error("Could not read that image file"));
+    img.src = dataUrl;
+  });
+}
+
 // data: URL (from the camera capture) → base64 + mime type
 function dataUrlToBase64(dataUrl) {
-  const [header, base64] = dataUrl.split(",");
-  const mimeType = header.match(/data:(.*?);base64/)?.[1] || "image/jpeg";
-  return { base64, mimeType };
+  return downscaleToBase64(dataUrl);
 }
 
 // File (from the blueprint upload) → base64 + mime type
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = (e) => {
-      const dataUrl = e.target.result;
-      const base64 = dataUrl.split(",")[1];
-      resolve({ base64, mimeType: file.type || "image/jpeg" });
-    };
+    reader.onload = (e) => downscaleToBase64(e.target.result).then(resolve, reject);
     reader.onerror = () => reject(new Error("Failed to read blueprint file"));
     reader.readAsDataURL(file);
   });
@@ -379,7 +398,7 @@ function fileToBase64(file) {
  */
 async function analyzeBuilderProject({ sitePhotoDataUrl, blueprintFile, apiKey, onProgress }) {
   onProgress?.(10);
-  const siteImg = dataUrlToBase64(sitePhotoDataUrl);
+  const siteImg = await dataUrlToBase64(sitePhotoDataUrl);
   const bpImg = blueprintFile ? await fileToBase64(blueprintFile) : null;
 
   onProgress?.(25);
@@ -408,7 +427,9 @@ async function analyzeBuilderProject({ sitePhotoDataUrl, blueprintFile, apiKey, 
     },
     body: JSON.stringify({
       model: CLAUDE_MODEL,
-      max_tokens: 3000,
+      // A full materials list + steps + warnings runs long; at 3000 the JSON
+      // gets cut off mid-object and the parse below fails.
+      max_tokens: 8000,
       system: ANALYSIS_SYSTEM_PROMPT,
       messages: [{ role: "user", content: userContent }],
     }),
@@ -425,11 +446,16 @@ async function analyzeBuilderProject({ sitePhotoDataUrl, blueprintFile, apiKey, 
   const raw = data.content?.[0]?.text ?? "";
   onProgress?.(90);
 
-  const clean = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+  // Grab the outermost {...} rather than trusting the reply to be bare JSON —
+  // it often arrives wrapped in a code fence or a line of preamble.
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
   let result;
   try {
-    result = JSON.parse(clean);
+    if (start === -1 || end <= start) throw new Error("no JSON object found");
+    result = JSON.parse(raw.slice(start, end + 1));
   } catch {
+    console.error("Unparseable model response:", raw);
     throw new Error("AI returned an unexpected format. Try a clearer photo, or retake the shot.");
   }
 
@@ -850,7 +876,7 @@ const CameraScreen = ({ onNav, apiKey, onOpenSettings, onAnalyzed }) => {
       <input
         ref={blueprintInputRef}
         type="file"
-        accept=".pdf,.png,.jpg,.jpeg"
+        accept="image/png,image/jpeg,image/webp"
         style={{ display: "none" }}
         onChange={handleBlueprintChange}
       />
@@ -877,7 +903,7 @@ const CameraScreen = ({ onNav, apiKey, onOpenSettings, onAnalyzed }) => {
             {hasBlueprint ? blueprintFile?.name : "Upload Blueprint / House Plan"}
           </p>
           <p style={{ fontSize: 12, color: C.gray, marginTop: 2 }}>
-            {hasBlueprint ? `${(blueprintFile.size / 1024 / 1024).toFixed(1)} MB · Ready for analysis` : "PDF, PNG, JPG — up to 50MB"}
+            {hasBlueprint ? `${(blueprintFile.size / 1024 / 1024).toFixed(1)} MB · Ready for analysis` : "PNG or JPG photo / scan of the plan"}
           </p>
         </div>
         {hasBlueprint && <Icon name="check" size={18} color={C.success} />}
